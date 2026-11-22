@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.egg-info/
+build/
+dist/
+.env
+.env.*
+docker-compose.yml
+# Voiceprints and enrolment recordings: never committed
+voiceprints/
+enrolment/
+*.wav
+*.npy
+# Local list of private words the privacy scan blocks. NEVER commit.
+.private-terms
+.private-terms-required

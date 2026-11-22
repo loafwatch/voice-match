@@ -1,0 +1,13 @@
+# Example only. Copy to docker-compose.yml (git-ignored) and fill in your values.
+services:
+  voice-match:
+    image: ghcr.io/loafwatch/voice-match:latest
+    container_name: voice-match
+    restart: unless-stopped
+    ports:
+      - "10310:10310"
+    environment:
+      # Your existing faster-whisper Wyoming server
+      VM_UPSTREAM_URI: tcp://faster-whisper:10300
+      # VM_LOG_TRANSCRIPTS: "false"   # keep off unless debugging
+      # VM_DEBUG: "false"

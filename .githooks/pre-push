@@ -1,0 +1,3 @@
+#!/bin/sh
+# Final check of every tracked file before anything leaves this machine.
+exec python3 scripts/privacy_scan.py --all
