@@ -28,6 +28,9 @@ class SileroVad:
     """Loads the model once; hands out a stream per utterance."""
 
     def __init__(self, model_path: str | Path = DEFAULT_MODEL) -> None:
+        # Privacy: never let onnxruntime emit telemetry events.
+        if hasattr(onnxruntime, "disable_telemetry_events"):
+            onnxruntime.disable_telemetry_events()
         opts = onnxruntime.SessionOptions()
         opts.inter_op_num_threads = 1
         opts.intra_op_num_threads = 1
