@@ -38,3 +38,13 @@ async def send_speaker(
         await asyncio.to_thread(_post, url, payload, timeout)
     except Exception as err:  # noqa: BLE001 - HA being down must not break voice
         _LOGGER.warning("Could not update Home Assistant speaker sensor: %s", type(err).__name__)
+
+
+async def send_status(url: Optional[str], payload: dict, timeout: float = 2.0) -> None:
+    """Post enrolment status (state, name, done, total, message, voices)."""
+    if not url:
+        return
+    try:
+        await asyncio.to_thread(_post, url, payload, timeout)
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.warning("Could not update Home Assistant enrolment sensor: %s", type(err).__name__)

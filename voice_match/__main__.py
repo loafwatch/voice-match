@@ -41,13 +41,23 @@ async def main() -> None:
             from .handler import SpeakerContext
             from .speaker import SpeakerModel, Voiceprints
 
+            from functools import partial as _partial
+
+            from .control import ControlServer
+            from .enrolment import Enrolment
+            from .ha_notify import send_status
+
             model = SpeakerModel()
             voiceprints = Voiceprints(model, settings.data_dir)
             voiceprints.build()
-            speaker = SpeakerContext(model, voiceprints.prints, voiceprints)
+            enrolment = Enrolment(voiceprints, _partial(send_status, settings.ha_enrol_webhook_url))
+            speaker = SpeakerContext(model, voiceprints.prints, voiceprints, enrolment)
             _LOGGER.info("Speaker recognition: on (threshold %.2f)", settings.speaker.threshold)
-    if settings.enroll_name:
-        _LOGGER.warning("Enrolment mode: every command's voiceprint is saved (no audio is kept)")
+            await send_status(settings.ha_enrol_webhook_url, enrolment.status())
+            if settings.control_token:
+                await ControlServer(enrolment, settings.control_token, port=settings.control_port).start()
+            else:
+                _LOGGER.info("Enrolment control API off (set VM_CONTROL_TOKEN to enable)")
 
     info_cache: dict = {}
     try:

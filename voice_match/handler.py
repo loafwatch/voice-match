@@ -27,6 +27,7 @@ from wyoming.server import AsyncEventHandler
 from . import debug_audio, ha_notify
 from .config import Settings
 from .trim import command_ended, decide
+from .enrolment import Enrolment
 from .speaker import SpeakerModel, SpeakerTracker, Voiceprints
 from .vad import SAMPLE_RATE, SileroVad, VadStream
 
@@ -35,11 +36,16 @@ class SpeakerContext:
     """Shared, loaded once: the speaker model and the enrolled voiceprints."""
 
     def __init__(
-        self, model: SpeakerModel, prints: dict, voiceprints: Optional["Voiceprints"] = None
+        self,
+        model: SpeakerModel,
+        prints: dict,
+        voiceprints: Optional["Voiceprints"] = None,
+        enrolment: Optional["Enrolment"] = None,
     ) -> None:
         self.model = model
-        self.prints = prints
-        self.voiceprints = voiceprints  # needed for enrolment
+        self.prints = prints  # shared dict: rebuilt in place after enrolment
+        self.voiceprints = voiceprints
+        self.enrolment = enrolment
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -251,19 +257,22 @@ class ProxyEventHandler(AsyncEventHandler):
         self.vad_stream = None
         self.tracker = None
 
-        if (
-            self.settings.enroll_name
-            and vad_kept
-            and self.speaker is not None
-            and self.speaker.voiceprints is not None
-        ):
-            # Only the embedding (numbers) is stored, never the audio.
+        enrolment = self.speaker.enrolment if self.speaker is not None else None
+        if enrolment is not None and enrolment.active:
+            # Guided enrolment: store the voice (as numbers only), don't transcribe.
             try:
                 pcm = np.frombuffer(vad_kept, dtype="<i2").astype(np.float32) / 32768.0
-                if self.speaker.voiceprints.add(self.settings.enroll_name, pcm):
-                    speaker_note += " enrolment_saved=yes"
+                reply = await enrolment.add_sample(pcm)
             except Exception:  # noqa: BLE001
-                _LOGGER.exception("Could not save enrolment embedding")
+                _LOGGER.exception("Enrolment sample failed")
+                reply = "voice enrolment retry"
+            await self.write_event(Transcript(text=reply).event())
+            _LOGGER.info(
+                "enrolment sample: audio=%.2fs speech=%.2fs result=%s total=%.0fms",
+                seconds, len(vad_kept) / bytes_per_second, reply.replace("voice enrolment ", ""),
+                (time.monotonic() - received_at) * 1000,
+            )
+            return
 
         if self.settings.debug_audio_dir:
             debug_audio.save(

@@ -41,54 +41,23 @@ Then set `VM_HA_WEBHOOK_URL` to `http://<home-assistant>:8123/api/webhook/<long 
 
 ### Enrolling voices
 
-1. Set `VM_DATA_DIR` (and mount a folder there) and `VM_ENROLL=<name>` (letters, digits, `_` or `-`), then restart.
-2. That person gives 10–15 ordinary commands at the satellite, at normal distance, with the room quiet. For each command, a speaker embedding (256 numbers describing the voice) is saved to `VM_DATA_DIR/embeddings/<name>/`. **No audio is ever written to disk**, and an embedding cannot be turned back into speech.
-3. Remove `VM_ENROLL` and restart. Voiceprints are built at start-up into `VM_DATA_DIR/voiceprints/` (with a `.json` of quality stats). Repeat for each person. To top up later, enrol again: new embeddings are averaged in with the old ones.
+Enrolment is a guided session started from Home Assistant (for example a button on a dashboard):
 
-Delete a person's `embeddings/<name>/` folder and `voiceprints/<name>.*` files to remove them. Enrolment recordings from older versions (`enrol/<name>/*.wav`) are converted to embeddings at start-up and the `.wav` files deleted; nothing else in the folder is touched.
+1. Set `VM_CONTROL_TOKEN` (a long random string) and publish port `10311`. Home Assistant calls the control API with a `rest_command`, sending the token in the `X-Voice-Match-Token` header:
+   - `POST /enrol/start` `{"name": "speaker_a", "total": 5, "mode": "replace"}` (`mode: "add"` tops up an existing voice instead of replacing it)
+   - `POST /enrol/cancel`
+   - `POST /voices/delete` `{"name": "speaker_a"}`
+   - `GET /status`
+2. The person then says the wake word and reads a sentence, `total` times. Each sample's speaker embedding (256 numbers) is saved to `VM_DATA_DIR/embeddings/<name>/`; **no audio is ever written to disk**, and an embedding cannot be turned back into speech. Instead of transcribing, voice-match answers with a status transcript for a Home Assistant sentence automation to reply to:
+   - `voice enrolment sample <done> of <total>`
+   - `voice enrolment complete <name>`
+   - `voice enrolment retry` (less than 1.5 s of speech)
+   - `voice enrolment other <name>` (sounded like someone already enrolled – rejected)
+3. After the last sample the voiceprint is rebuilt and used straight away – no restart. Sessions time out after 5 minutes without a sample; cancelling discards that session's samples.
 
-Each command logs one line: recording length, how much was sent, what was trimmed, time spent in the VAD and the added latency (`proxy_overhead`).
+Progress is posted to `VM_HA_ENROL_WEBHOOK_URL` as `{"state", "name", "done", "total", "message", "voices": [{"name", "recordings", "built"}]}` – handy for a trigger-based template sensor that a dashboard can show.
 
-## How it works
-
-```
-Satellite → Home Assistant Assist pipeline → voice-match (this) → faster-whisper
-                                                   │
-                                                   └─ (soon) sensor with who spoke
-```
-
-Home Assistant talks to voice-match exactly as it would to any Wyoming speech-to-text server. voice-match buffers the utterance, forwards it upstream and relays the transcript back.
-
-## Run it
-
-```sh
-docker run -d --name voice-match -p 10310:10310 \
-  -e VM_UPSTREAM_URI=tcp://faster-whisper:10300 \
-  ghcr.io/loafwatch/voice-match:latest
-```
-
-Then in Home Assistant: **Settings → Devices & services → Add integration → Wyoming Protocol**, host = the machine running voice-match, port `10310`. Select **voice-match** as the speech-to-text engine in your Assist pipeline.
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `VM_UPSTREAM_URI` | *(required)* | Upstream Wyoming STT server |
-| `VM_URI` | `tcp://0.0.0.0:10310` | Where voice-match listens |
-| `VM_UPSTREAM_TIMEOUT` | `30` | Seconds to wait for a transcript |
-| `VM_TRIM` | `first` | `first` = keep only the first burst of speech; `edges` = only cut silence before and after; `off` |
-| `VM_TRIM_GAP_MS` | `800` | In `first` mode, a silence longer than this ends the command |
-| `VM_TRIM_PAD_BEFORE_MS` / `VM_TRIM_PAD_AFTER_MS` | `200` / `300` | Audio kept either side of the speech |
-| `VM_EARLY_END` | `true` | Answer as soon as the command ends instead of waiting for Home Assistant to stop recording |
-| `VM_VAD_THRESHOLD` | `0.5` | Speech probability needed to count as speech |
-| `VM_DATA_DIR` | *(unset)* | Folder for enrolment recordings and voiceprints; enables speaker recognition |
-| `VM_ENROLL` | *(unset)* | Enrolment mode: save each command as a recording of this person |
-| `VM_SPEAKER_THRESHOLD` | `0.45` | Similarity (0–1) a window needs to count as an enrolled voice |
-| `VM_SPEAKER_GAP_MS` | `1000` | Enrolled voice not heard for this long = command over |
-| `VM_HA_WEBHOOK_URL` | *(unset)* | Home Assistant webhook that receives `{"speaker", "score"}` after each command |
-| `PUID` / `PGID` | `99` / `100` | User the container runs as (owns `VM_DATA_DIR`) |
-| `VM_DEBUG_AUDIO_DIR` | *(unset)* | If set, saves each command's audio before/after trimming (for tuning; stays on your server) |
-| `VM_DEBUG_AUDIO_KEEP` | `20` | How many commands of debug audio to keep |
-| `VM_LOG_TRANSCRIPTS` | `false` | Log transcript text (off by default for privacy) |
-| `VM_DEBUG` | `false` | Debug logging |
+Enrolment data from older versions (`enrol/<name>/*.wav`) is converted to embeddings at start-up and the `.wav` files deleted; nothing else in the folder is touched.
 
 ## Development
 

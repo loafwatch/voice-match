@@ -6,6 +6,7 @@ services:
     restart: unless-stopped
     ports:
       - "10310:10310"
+      - "10311:10311"   # enrolment control API (only if VM_CONTROL_TOKEN is set)
     volumes:
       - /path/to/appdata/voice-match:/data
     environment:
@@ -13,6 +14,7 @@ services:
       VM_UPSTREAM_URI: tcp://faster-whisper:10300
       # Speaker recognition: voiceprints are kept in this folder
       VM_DATA_DIR: /data
-      # VM_ENROLL: speaker_a          # enrolment mode for one person, then remove
+      # Enrolment control API (called by Home Assistant)
+      # VM_CONTROL_TOKEN: "<long random string>"
       # VM_LOG_TRANSCRIPTS: "false"   # keep off unless debugging
       # VM_DEBUG: "false"

@@ -107,11 +107,42 @@ class Voiceprints:
         """Embed one enrolment command's speech and store only the embedding."""
         if len(audio) < SAMPLE_RATE // 2:
             return None
-        stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
+        return self.save_embedding(name, self.model.embed(audio), len(audio) / SAMPLE_RATE, stamp)
+
+    def save_embedding(
+        self, name: str, embedding: np.ndarray, seconds: float, stamp: Optional[str] = None
+    ) -> Path:
+        stamp = stamp or (time.strftime("%Y%m%d-%H%M%S") + f"-{time.time_ns() % 1_000_000:06d}")
         path = self.emb_dir / name / f"{stamp}.npz"
         path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez(path, embedding=self.model.embed(audio), seconds=len(audio) / SAMPLE_RATE)
+        np.savez(path, embedding=embedding, seconds=seconds)
         return path
+
+    def stats(self, name: str) -> dict:
+        try:
+            return json.loads((self.print_dir / f"{name}.json").read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def delete(self, name: str) -> bool:
+        """Remove one person: their embeddings and voiceprint files only."""
+        removed = False
+        person = self.emb_dir / name
+        if person.is_dir():
+            for f in person.glob("*.npz"):
+                f.unlink(missing_ok=True)
+                removed = True
+            try:
+                person.rmdir()  # only if now empty
+            except OSError:
+                pass
+        for suffix in (".npy", ".json"):
+            f = self.print_dir / f"{name}{suffix}"
+            if f.exists():
+                f.unlink()
+                removed = True
+        self.prints.pop(name, None)
+        return removed
 
     def convert_legacy_recordings(self) -> int:
         """Turn legacy enrolment .wav files into embeddings, then delete the .wav files."""

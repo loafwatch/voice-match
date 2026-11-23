@@ -14,7 +14,7 @@ RUN python scripts/fetch_models.py \
 COPY docker-entrypoint.sh /usr/local/bin/
 
 ENV HOME=/tmp
-EXPOSE 10310
+EXPOSE 10310 10311
 
 # Required: VM_UPSTREAM_URI, e.g. tcp://faster-whisper:10300
 # Runs as PUID:PGID (default 99:100) after preparing VM_DATA_DIR.

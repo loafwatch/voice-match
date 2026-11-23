@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 from dataclasses import dataclass, field
 
 from .speaker import SpeakerSettings
@@ -29,8 +28,10 @@ class Settings:
     early_end: bool = True
     data_dir: str | None = None
     speaker: SpeakerSettings = field(default_factory=SpeakerSettings)
-    enroll_name: str | None = None
     ha_webhook_url: str | None = None
+    ha_enrol_webhook_url: str | None = None
+    control_token: str | None = None
+    control_port: int = 10311
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -103,9 +104,15 @@ def parse_settings(argv: list[str] | None = None) -> Settings:
         "--speaker-gap-ms", type=float, default=float(os.environ.get("VM_SPEAKER_GAP_MS", "1000"))
     )
     parser.add_argument(
-        "--enroll",
-        default=os.environ.get("VM_ENROLL") or None,
-        help="Enrolment mode: save every command's speech as a recording of this person (env VM_ENROLL)",
+        "--control-token",
+        default=os.environ.get("VM_CONTROL_TOKEN") or None,
+        help="Enables the enrolment control API; callers must send this in X-Voice-Match-Token (env VM_CONTROL_TOKEN)",
+    )
+    parser.add_argument("--control-port", type=int, default=int(os.environ.get("VM_CONTROL_PORT", "10311")))
+    parser.add_argument(
+        "--ha-enrol-webhook-url",
+        default=os.environ.get("VM_HA_ENROL_WEBHOOK_URL") or None,
+        help="Home Assistant webhook that receives enrolment progress (env VM_HA_ENROL_WEBHOOK_URL)",
     )
     parser.add_argument(
         "--ha-webhook-url",
@@ -137,11 +144,13 @@ def parse_settings(argv: list[str] | None = None) -> Settings:
         early_end=args.early_end,
         data_dir=args.data_dir,
         speaker=SpeakerSettings(threshold=args.speaker_threshold, gap_ms=args.speaker_gap_ms),
-        enroll_name=args.enroll,
         ha_webhook_url=args.ha_webhook_url,
+        ha_enrol_webhook_url=args.ha_enrol_webhook_url,
+        control_token=args.control_token,
+        control_port=args.control_port,
     )
-    if settings.enroll_name and not settings.data_dir:
-        parser.error("--enroll needs --data-dir (or VM_DATA_DIR)")
-    if settings.enroll_name and not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", settings.enroll_name):
-        parser.error("--enroll name: letters, digits, _ or - only")
+    if settings.control_token and len(settings.control_token) < 16:
+        parser.error("--control-token must be at least 16 characters")
+    if os.environ.get("VM_ENROLL"):
+        print("VM_ENROLL is no longer used: start enrolment from Home Assistant instead", flush=True)
     return settings
