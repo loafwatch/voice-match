@@ -16,6 +16,29 @@ It runs on the CPU and is designed to add well under half a second per command.
 
 **Speaker recognition (optional):** enrol household voices and voice-match scores a 1-second window every 250 ms against each voiceprint, using the [WeSpeaker](https://github.com/wenet-e2e/wespeaker) ResNet34-LM model (CC BY 4.0) on the CPU. It then keeps only the part of the recording where a household voice was speaking and ends the command once that voice stops – even if a TV talks the whole time. The speaker's name and match score are logged. If no enrolled voice is found, it falls back to the trimming above.
 
+### "Last speaker" sensor in Home Assistant
+
+voice-match can post who gave each command to a Home Assistant webhook – no Home Assistant token needed. Add a trigger-based template sensor (e.g. in a package), using a long random webhook ID:
+
+```yaml
+template:
+  - triggers:
+      - trigger: webhook
+        webhook_id: "<long random id>"
+        local_only: true
+        allowed_methods: [POST]
+    sensor:
+      - name: Voice match last speaker
+        unique_id: voice_match_last_speaker
+        icon: mdi:account-voice
+        state: "{{ trigger.json.speaker }}"
+        attributes:
+          score: "{{ trigger.json.score }}"
+          spoken_at: "{{ now().isoformat() }}"
+```
+
+Then set `VM_HA_WEBHOOK_URL` to `http://<home-assistant>:8123/api/webhook/<long random id>`. The sensor is updated while the command is being transcribed, so it is current by the time the conversation agent and any automations run. The state is the enrolled name, or `unknown`.
+
 ### Enrolling voices
 
 1. Set `VM_DATA_DIR` (and mount a folder there) and `VM_ENROLL=<name>` (letters, digits, `_` or `-`), then restart.
@@ -60,6 +83,7 @@ Then in Home Assistant: **Settings → Devices & services → Add integration �
 | `VM_ENROLL` | *(unset)* | Enrolment mode: save each command as a recording of this person |
 | `VM_SPEAKER_THRESHOLD` | `0.45` | Similarity (0–1) a window needs to count as an enrolled voice |
 | `VM_SPEAKER_GAP_MS` | `1000` | Enrolled voice not heard for this long = command over |
+| `VM_HA_WEBHOOK_URL` | *(unset)* | Home Assistant webhook that receives `{"speaker", "score"}` after each command |
 | `PUID` / `PGID` | `99` / `100` | User the container runs as (owns `VM_DATA_DIR`) |
 | `VM_DEBUG_AUDIO_DIR` | *(unset)* | If set, saves each command's audio before/after trimming (for tuning; stays on your server) |
 | `VM_DEBUG_AUDIO_KEEP` | `20` | How many commands of debug audio to keep |

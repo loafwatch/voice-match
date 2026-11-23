@@ -30,6 +30,7 @@ class Settings:
     data_dir: str | None = None
     speaker: SpeakerSettings = field(default_factory=SpeakerSettings)
     enroll_name: str | None = None
+    ha_webhook_url: str | None = None
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -106,6 +107,11 @@ def parse_settings(argv: list[str] | None = None) -> Settings:
         default=os.environ.get("VM_ENROLL") or None,
         help="Enrolment mode: save every command's speech as a recording of this person (env VM_ENROLL)",
     )
+    parser.add_argument(
+        "--ha-webhook-url",
+        default=os.environ.get("VM_HA_WEBHOOK_URL") or None,
+        help="Home Assistant webhook to post the speaker of each command to (env VM_HA_WEBHOOK_URL)",
+    )
     parser.add_argument("--debug-audio-keep", type=int, default=int(os.environ.get("VM_DEBUG_AUDIO_KEEP", "20")))
     args = parser.parse_args(argv)
 
@@ -132,6 +138,7 @@ def parse_settings(argv: list[str] | None = None) -> Settings:
         data_dir=args.data_dir,
         speaker=SpeakerSettings(threshold=args.speaker_threshold, gap_ms=args.speaker_gap_ms),
         enroll_name=args.enroll,
+        ha_webhook_url=args.ha_webhook_url,
     )
     if settings.enroll_name and not settings.data_dir:
         parser.error("--enroll needs --data-dir (or VM_DATA_DIR)")

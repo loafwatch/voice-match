@@ -25,7 +25,7 @@ from wyoming.event import Event
 from wyoming.info import Attribution, Describe, Info
 from wyoming.server import AsyncEventHandler
 
-from . import debug_audio
+from . import debug_audio, ha_notify
 from .config import Settings
 from .trim import command_ended, decide
 from .speaker import SpeakerModel, SpeakerTracker, write_wav
@@ -214,6 +214,8 @@ class ProxyEventHandler(AsyncEventHandler):
         trim_note = "off"
         vad_ms = 0.0
         speaker_note = ""
+        who: Optional[str] = None
+        who_score: Optional[float] = None
         frame_bytes = start.width * start.channels
         if self.vad_stream is not None:
             try:
@@ -239,7 +241,9 @@ class ProxyEventHandler(AsyncEventHandler):
                     f"speaker kept={s_start / start.rate:.2f}-{s_end / start.rate:.2f}s"
                 )
                 speaker_note = f" speaker={name} score={score:.2f} spk={spk_ms:.0f}ms"
+                who, who_score = name, score
             else:
+                who = "unknown"
                 best = max((w.score for w in self.tracker.windows), default=0.0)
                 speaker_note = f" speaker=unknown best_score={best:.2f} spk={spk_ms:.0f}ms"
         self.vad_stream = None
@@ -260,9 +264,17 @@ class ProxyEventHandler(AsyncEventHandler):
                 start.rate, start.width, start.channels, audio, kept,
             )
 
+        # Tell Home Assistant who spoke while faster-whisper works, so the
+        # sensor is up to date before the transcript reaches the conversation.
+        notify: Optional[asyncio.Task] = None
+        if who is not None and self.settings.ha_webhook_url:
+            notify = asyncio.create_task(
+                ha_notify.send_speaker(self.settings.ha_webhook_url, who, who_score)
+            )
+
         try:
             upstream_seconds, sent_transcript = await asyncio.wait_for(
-                self._forward(stop, kept), self.settings.upstream_timeout
+                self._forward(stop, kept, notify), self.settings.upstream_timeout
             )
         except Exception as err:  # noqa: BLE001
             _LOGGER.exception("Upstream transcription failed")
@@ -285,7 +297,9 @@ class ProxyEventHandler(AsyncEventHandler):
             sent_transcript if self.settings.log_transcripts else "(hidden)",
         )
 
-    async def _forward(self, stop: AudioStop, audio: bytes) -> tuple[float, str]:
+    async def _forward(
+        self, stop: AudioStop, audio: bytes, before_transcript: Optional[asyncio.Task] = None
+    ) -> tuple[float, str]:
         """Replay audio upstream; relay its response. Returns timing + text."""
         start = self.audio_start
         assert start is not None
@@ -309,6 +323,11 @@ class ProxyEventHandler(AsyncEventHandler):
                     raise ConnectionError("Upstream closed before sending a transcript")
                 if Transcript.is_type(event.type):
                     upstream_seconds = time.monotonic() - sent_at
+                    if before_transcript is not None:
+                        try:
+                            await asyncio.wait_for(asyncio.shield(before_transcript), 0.5)
+                        except asyncio.TimeoutError:
+                            pass  # don't hold up the answer for a slow HA update
                     await self.write_event(event)
                     return upstream_seconds, Transcript.from_event(event).text
                 if event.type in _RELAY_TYPES:
