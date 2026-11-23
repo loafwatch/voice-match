@@ -54,6 +54,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build image for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: voice-match:test
+      - name: Smoke test (entrypoint drops root, models load)
+        run: |
+          docker run --rm -e VM_DATA_DIR=/tmp/vmdata --entrypoint docker-entrypoint.sh voice-match:test --help
+          docker run --rm --entrypoint python voice-match:test -c "from voice_match.vad import SileroVad; from voice_match.speaker import SpeakerModel; SileroVad(); SpeakerModel(); print('models ok')"
       - uses: docker/build-push-action@v6
         with:
           context: .

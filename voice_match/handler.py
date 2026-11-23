@@ -12,9 +12,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 from dataclasses import replace
 from typing import List, Optional
 
+import numpy as np
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncClient
@@ -26,7 +28,16 @@ from wyoming.server import AsyncEventHandler
 from . import debug_audio
 from .config import Settings
 from .trim import command_ended, decide
+from .speaker import SpeakerModel, SpeakerTracker, write_wav
 from .vad import SAMPLE_RATE, SileroVad, VadStream
+
+
+class SpeakerContext:
+    """Shared, loaded once: the speaker model and the enrolled voiceprints."""
+
+    def __init__(self, model: SpeakerModel, prints: dict) -> None:
+        self.model = model
+        self.prints = prints
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,12 +81,21 @@ class ProxyEventHandler(AsyncEventHandler):
     """One instance per connection from Home Assistant."""
 
     def __init__(
-        self, settings: Settings, info_cache: dict, vad: Optional[SileroVad], *args, **kwargs
+        self,
+        settings: Settings,
+        info_cache: dict,
+        vad: Optional[SileroVad],
+        *args,
+        speaker: Optional[SpeakerContext] = None,
+        **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.settings = settings
         self.info_cache = info_cache
         self.vad = vad
+        self.speaker = speaker
+        self.tracker: Optional[SpeakerTracker] = None
+        self.samples = np.zeros(0, dtype=np.float32)
         self.vad_stream: Optional[VadStream] = None
         self.transcribe: Optional[Transcribe] = None
         self.audio_start: Optional[AudioStart] = None
@@ -102,6 +122,12 @@ class ProxyEventHandler(AsyncEventHandler):
                 fmt = (self.audio_start.rate, self.audio_start.width, self.audio_start.channels)
                 if fmt == (SAMPLE_RATE, 2, 1):
                     self.vad_stream = self.vad.stream()
+                    self.samples = np.zeros(0, dtype=np.float32)
+                    self.tracker = None
+                    if self.speaker is not None and self.speaker.prints:
+                        self.tracker = SpeakerTracker(
+                            self.speaker.model, self.speaker.prints, self.settings.speaker
+                        )
                 else:
                     _LOGGER.warning("Audio format %s not 16 kHz/16-bit/mono; not trimming", fmt)
             return True
@@ -117,11 +143,15 @@ class ProxyEventHandler(AsyncEventHandler):
                 except Exception:  # noqa: BLE001 - never lose a command over VAD
                     _LOGGER.exception("VAD failed; not trimming this command")
                     self.vad_stream = None
-            if (
-                self.vad_stream is not None
-                and self.settings.early_end
-                and command_ended(self.vad_stream.probs, self.settings.trim)
-            ):
+            if self.tracker is not None and self.vad_stream is not None:
+                try:
+                    pcm = np.frombuffer(chunk.audio, dtype="<i2").astype(np.float32) / 32768.0
+                    self.samples = np.concatenate([self.samples, pcm])
+                    self.tracker.update(self.samples, self.vad_stream.probs)
+                except Exception:  # noqa: BLE001 - fall back to VAD-only
+                    _LOGGER.exception("Speaker matching failed; using VAD only for this command")
+                    self.tracker = None
+            if self.settings.early_end and self._command_over():
                 # The command is over even if the room isn't quiet (e.g. TV):
                 # answer now. Home Assistant stops recording when the
                 # transcript arrives.
@@ -140,6 +170,20 @@ class ProxyEventHandler(AsyncEventHandler):
 
         _LOGGER.debug("Ignoring event type %s", event.type)
         return True
+
+    def _command_over(self) -> bool:
+        if self.vad_stream is None:
+            return False
+        vad_over = command_ended(self.vad_stream.probs, self.settings.trim)
+        if self.tracker is None:
+            return vad_over
+        # With voiceprints: a household voice spoke and then stopped (even if a
+        # TV carries on), or VAD heard silence after a household voice. If no
+        # household voice has spoken, leave it to Home Assistant to end the
+        # recording - it may still be coming, or be a guest in a quiet room.
+        if self.tracker.ended():
+            return True
+        return vad_over and bool(self.tracker.first_run())
 
     async def _describe(self) -> None:
         try:
@@ -166,15 +210,17 @@ class ProxyEventHandler(AsyncEventHandler):
         seconds = len(audio) / bytes_per_second
 
         kept = audio
+        vad_kept = audio
         trim_note = "off"
         vad_ms = 0.0
+        speaker_note = ""
+        frame_bytes = start.width * start.channels
         if self.vad_stream is not None:
             try:
                 probs = self.vad_stream.finish()
                 vad_ms = self.vad_stream.compute_seconds * 1000
-                frame_bytes = start.width * start.channels
                 result = decide(probs, len(audio) // frame_bytes, self.settings.trim)
-                kept = audio[result.start * frame_bytes : result.end * frame_bytes]
+                vad_kept = kept = audio[result.start * frame_bytes : result.end * frame_bytes]
                 trim_note = (
                     f"{result.reason} kept={result.start / start.rate:.2f}-"
                     f"{result.end / start.rate:.2f}s speech_segments={len(result.segments)}"
@@ -182,7 +228,31 @@ class ProxyEventHandler(AsyncEventHandler):
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Trimming failed; sending the whole recording")
                 kept, trim_note = audio, "failed, kept all"
+        if self.tracker is not None:
+            found = self.tracker.result()
+            spk_ms = self.tracker.compute_seconds * 1000
+            if found is not None:
+                s_start, s_end, name, score = found
+                s_end = min(len(audio) // frame_bytes, s_end)
+                kept = audio[s_start * frame_bytes : s_end * frame_bytes]
+                trim_note = (
+                    f"speaker kept={s_start / start.rate:.2f}-{s_end / start.rate:.2f}s"
+                )
+                speaker_note = f" speaker={name} score={score:.2f} spk={spk_ms:.0f}ms"
+            else:
+                best = max((w.score for w in self.tracker.windows), default=0.0)
+                speaker_note = f" speaker=unknown best_score={best:.2f} spk={spk_ms:.0f}ms"
         self.vad_stream = None
+        self.tracker = None
+
+        if self.settings.enroll_name and self.settings.data_dir and vad_kept:
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            path = Path(self.settings.data_dir) / "enrol" / self.settings.enroll_name / f"{stamp}.wav"
+            try:
+                write_wav(path, vad_kept)
+                speaker_note += " enrolment_saved=yes"
+            except OSError as err:
+                _LOGGER.warning("Could not save enrolment recording: %s", err)
 
         if self.settings.debug_audio_dir:
             debug_audio.save(
@@ -201,12 +271,13 @@ class ProxyEventHandler(AsyncEventHandler):
 
         total = time.monotonic() - received_at
         _LOGGER.info(
-            "audio=%.2fs sent=%.2fs ended_early=%s trim=[%s] vad=%.0fms total=%.0fms "
+            "audio=%.2fs sent=%.2fs ended_early=%s trim=[%s]%s vad=%.0fms total=%.0fms "
             "upstream=%.0fms proxy_overhead=%.0fms text=%r",
             seconds,
             len(kept) / bytes_per_second,
             self.ended_early,
             trim_note,
+            speaker_note,
             vad_ms,
             total * 1000,
             upstream_seconds * 1000,

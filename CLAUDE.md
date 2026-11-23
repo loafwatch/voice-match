@@ -19,4 +19,5 @@ This repository is public. It must never contain personal data about the househo
 - Runs on the CPU. Do not use the GPU – it is shared with a local LLM and filling it slows the voice assistant.
 - Must add well under 0.5 s per command. Log timing for every request.
 - Transcript text is not logged unless `VM_LOG_TRANSCRIPTS` is on.
-- Only permissively licensed dependencies and models (MIT, Apache-2.0, BSD). Do not copy code from non-commercial / no-derivatives licensed projects.
+- Only permissively licensed dependencies and models (MIT, Apache-2.0, BSD; model weights may also be CC BY 4.0 with attribution in README and the model NOTICE). Check the weights' licence, not just the code's. Do not copy code from, or use weights under, non-commercial / no-derivatives licences.
+- Models are fetched at build time by `scripts/fetch_models.py`, pinned by SHA-256. Never commit model files.

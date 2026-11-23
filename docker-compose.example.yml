@@ -6,8 +6,13 @@ services:
     restart: unless-stopped
     ports:
       - "10310:10310"
+    volumes:
+      - /path/to/appdata/voice-match:/data
     environment:
       # Your existing faster-whisper Wyoming server
       VM_UPSTREAM_URI: tcp://faster-whisper:10300
+      # Speaker recognition: voiceprints are kept in this folder
+      VM_DATA_DIR: /data
+      # VM_ENROLL: speaker_a          # enrolment mode for one person, then remove
       # VM_LOG_TRANSCRIPTS: "false"   # keep off unless debugging
       # VM_DEBUG: "false"

@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from dataclasses import dataclass, field
 
+from .speaker import SpeakerSettings
 from .trim import TrimSettings
 
 
@@ -25,6 +27,9 @@ class Settings:
     debug_audio_dir: str | None = None
     debug_audio_keep: int = 20
     early_end: bool = True
+    data_dir: str | None = None
+    speaker: SpeakerSettings = field(default_factory=SpeakerSettings)
+    enroll_name: str | None = None
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -85,13 +90,29 @@ def parse_settings(argv: list[str] | None = None) -> Settings:
         default=_env_bool("VM_EARLY_END", True),
         help="Wait for Home Assistant to end the recording instead of ending it at the end of the command (env VM_EARLY_END=false)",
     )
+    parser.add_argument(
+        "--data-dir",
+        default=os.environ.get("VM_DATA_DIR") or None,
+        help="Folder for enrolment recordings and voiceprints; enables speaker recognition (env VM_DATA_DIR)",
+    )
+    parser.add_argument(
+        "--speaker-threshold", type=float, default=float(os.environ.get("VM_SPEAKER_THRESHOLD", "0.45"))
+    )
+    parser.add_argument(
+        "--speaker-gap-ms", type=float, default=float(os.environ.get("VM_SPEAKER_GAP_MS", "1000"))
+    )
+    parser.add_argument(
+        "--enroll",
+        default=os.environ.get("VM_ENROLL") or None,
+        help="Enrolment mode: save every command's speech as a recording of this person (env VM_ENROLL)",
+    )
     parser.add_argument("--debug-audio-keep", type=int, default=int(os.environ.get("VM_DEBUG_AUDIO_KEEP", "20")))
     args = parser.parse_args(argv)
 
     if not args.upstream_uri:
         parser.error("--upstream-uri (or VM_UPSTREAM_URI) is required")
 
-    return Settings(
+    settings = Settings(
         uri=args.uri,
         upstream_uri=args.upstream_uri,
         upstream_timeout=args.upstream_timeout,
@@ -108,4 +129,12 @@ def parse_settings(argv: list[str] | None = None) -> Settings:
         debug_audio_dir=args.debug_audio_dir,
         debug_audio_keep=args.debug_audio_keep,
         early_end=args.early_end,
+        data_dir=args.data_dir,
+        speaker=SpeakerSettings(threshold=args.speaker_threshold, gap_ms=args.speaker_gap_ms),
+        enroll_name=args.enroll,
     )
+    if settings.enroll_name and not settings.data_dir:
+        parser.error("--enroll needs --data-dir (or VM_DATA_DIR)")
+    if settings.enroll_name and not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", settings.enroll_name):
+        parser.error("--enroll name: letters, digits, _ or - only")
+    return settings
