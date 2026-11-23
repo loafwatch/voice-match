@@ -25,7 +25,7 @@ from wyoming.server import AsyncEventHandler
 
 from . import debug_audio
 from .config import Settings
-from .trim import decide
+from .trim import command_ended, decide
 from .vad import SAMPLE_RATE, SileroVad, VadStream
 
 _LOGGER = logging.getLogger(__name__)
@@ -81,6 +81,7 @@ class ProxyEventHandler(AsyncEventHandler):
         self.audio_start: Optional[AudioStart] = None
         self.chunks: List[AudioChunk] = []
         self.audio_started_at = 0.0
+        self.ended_early = False
 
     async def handle_event(self, event: Event) -> bool:
         if Describe.is_type(event.type):
@@ -95,6 +96,7 @@ class ProxyEventHandler(AsyncEventHandler):
             self.audio_start = AudioStart.from_event(event)
             self.chunks = []
             self.audio_started_at = time.monotonic()
+            self.ended_early = False
             self.vad_stream = None
             if self.vad is not None and self.settings.trim.mode != "off":
                 fmt = (self.audio_start.rate, self.audio_start.width, self.audio_start.channels)
@@ -105,6 +107,8 @@ class ProxyEventHandler(AsyncEventHandler):
             return True
 
         if AudioChunk.is_type(event.type):
+            if self.ended_early:
+                return True  # already answered; HA will stop sending shortly
             chunk = AudioChunk.from_event(event)
             self.chunks.append(chunk)
             if self.vad_stream is not None:
@@ -113,13 +117,25 @@ class ProxyEventHandler(AsyncEventHandler):
                 except Exception:  # noqa: BLE001 - never lose a command over VAD
                     _LOGGER.exception("VAD failed; not trimming this command")
                     self.vad_stream = None
+            if (
+                self.vad_stream is not None
+                and self.settings.early_end
+                and command_ended(self.vad_stream.probs, self.settings.trim)
+            ):
+                # The command is over even if the room isn't quiet (e.g. TV):
+                # answer now. Home Assistant stops recording when the
+                # transcript arrives.
+                self.ended_early = True
+                await self._transcribe(AudioStop())
             return True
 
         if AudioStop.is_type(event.type):
-            await self._transcribe(AudioStop.from_event(event))
+            if not self.ended_early:
+                await self._transcribe(AudioStop.from_event(event))
             self.transcribe = None
             self.audio_start = None
             self.chunks = []
+            self.ended_early = False
             return True
 
         _LOGGER.debug("Ignoring event type %s", event.type)
@@ -185,10 +201,11 @@ class ProxyEventHandler(AsyncEventHandler):
 
         total = time.monotonic() - received_at
         _LOGGER.info(
-            "audio=%.2fs sent=%.2fs trim=[%s] vad=%.0fms total=%.0fms upstream=%.0fms "
-            "proxy_overhead=%.0fms text=%r",
+            "audio=%.2fs sent=%.2fs ended_early=%s trim=[%s] vad=%.0fms total=%.0fms "
+            "upstream=%.0fms proxy_overhead=%.0fms text=%r",
             seconds,
             len(kept) / bytes_per_second,
+            self.ended_early,
             trim_note,
             vad_ms,
             total * 1000,

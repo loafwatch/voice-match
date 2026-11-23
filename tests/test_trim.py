@@ -174,3 +174,52 @@ async def test_proxy_sends_only_the_command(unused_tcp_port_factory):
     finally:
         await proxy.stop()
         await upstream.stop()
+
+
+def test_command_ended_only_after_gap_in_first_mode():
+    from voice_match.trim import command_ended
+
+    p, _ = probs_from([(0.2, 1.2)], 1.8)  # 0.6 s since speech: not yet
+    assert not command_ended(p, TrimSettings(mode="first"))
+    p, _ = probs_from([(0.2, 1.2)], 2.2)  # 1.0 s since speech: ended
+    assert command_ended(p, TrimSettings(mode="first"))
+    assert not command_ended(p, TrimSettings(mode="edges"))
+    p, _ = probs_from([], 5.0)  # nobody has spoken yet: keep listening
+    assert not command_ended(p, TrimSettings(mode="first"))
+
+
+async def test_proxy_answers_before_recording_ends(unused_tcp_port_factory):
+    """With TV still talking, the transcript comes back without AudioStop."""
+    import asyncio
+
+    up_port, proxy_port = unused_tcp_port_factory(), unused_tcp_port_factory()
+    upstream = AsyncTcpServer("127.0.0.1", up_port)
+    await upstream.start(CountingUpstream)
+    settings = Settings(
+        uri="", upstream_uri=f"tcp://127.0.0.1:{up_port}", upstream_timeout=5,
+        describe_timeout=1, log_transcripts=True, debug=True, trim=TrimSettings(mode="first"),
+    )
+    proxy = AsyncTcpServer("127.0.0.1", proxy_port)
+    await proxy.start(partial(ProxyEventHandler, settings, {}, LoudnessVad()))
+
+    def seg(seconds, loud):
+        return np.full(int(16000 * seconds), 8000 if loud else 0, "<i2").tobytes()
+
+    # command, 1.2 s quiet, then "TV" that never stops (no AudioStop is sent)
+    audio = seg(0.5, False) + seg(1.0, True) + seg(1.2, False) + seg(10.0, True)
+    try:
+        async with AsyncTcpClient("127.0.0.1", proxy_port) as client:
+            await client.write_event(Transcribe().event())
+            await client.write_event(AudioStart(rate=16000, width=2, channels=1).event())
+            for i in range(0, len(audio), 1024):
+                await client.write_event(
+                    AudioChunk(rate=16000, width=2, channels=1, audio=audio[i : i + 1024]).event()
+                )
+            event = await asyncio.wait_for(client.read_event(), 3)
+            assert Transcript.is_type(event.type)
+            sent_seconds = int(Transcript.from_event(event).text) / 32000
+            assert 1.4 <= sent_seconds <= 1.6
+            await client.write_event(AudioStop().event())  # late stop is ignored
+    finally:
+        await proxy.stop()
+        await upstream.stop()

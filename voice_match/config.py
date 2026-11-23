@@ -24,6 +24,7 @@ class Settings:
     trim: TrimSettings = field(default_factory=TrimSettings)
     debug_audio_dir: str | None = None
     debug_audio_keep: int = 20
+    early_end: bool = True
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -77,6 +78,13 @@ def parse_settings(argv: list[str] | None = None) -> Settings:
         default=os.environ.get("VM_DEBUG_AUDIO_DIR") or None,
         help="If set, save each command's audio before/after trimming here (env VM_DEBUG_AUDIO_DIR)",
     )
+    parser.add_argument(
+        "--no-early-end",
+        dest="early_end",
+        action="store_false",
+        default=_env_bool("VM_EARLY_END", True),
+        help="Wait for Home Assistant to end the recording instead of ending it at the end of the command (env VM_EARLY_END=false)",
+    )
     parser.add_argument("--debug-audio-keep", type=int, default=int(os.environ.get("VM_DEBUG_AUDIO_KEEP", "20")))
     args = parser.parse_args(argv)
 
@@ -99,4 +107,5 @@ def parse_settings(argv: list[str] | None = None) -> Settings:
         ),
         debug_audio_dir=args.debug_audio_dir,
         debug_audio_keep=args.debug_audio_keep,
+        early_end=args.early_end,
     )

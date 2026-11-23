@@ -87,3 +87,18 @@ def decide(probs: list[float], total_samples: int, s: TrimSettings) -> TrimResul
     start = max(0, keep[0][0] * FRAME - pad_before)
     end = min(total_samples, keep[-1][1] * FRAME + pad_after)
     return TrimResult(start, end, seg_samples, reason)
+
+
+def command_ended(probs: list[float], s: TrimSettings) -> bool:
+    """True once the first burst of speech is followed by a silence > gap_ms.
+
+    Only in "first" mode: anything said after that gap would be trimmed off
+    anyway, so there is no point waiting for the room to go quiet.
+    """
+    if s.mode != "first":
+        return False
+    segs = speech_segments(probs, s)
+    if not segs:
+        return False
+    trailing = len(probs) - segs[-1][1]
+    return trailing > s.gap_ms / FRAME_MS

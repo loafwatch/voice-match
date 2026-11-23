@@ -10,7 +10,11 @@ It runs on the CPU and is designed to add well under half a second per command.
 
 ## Status
 
-**Milestone 1 – trimming.** [Silero VAD](https://github.com/snakers4/silero-vad) (MIT, run with onnxruntime on the CPU) scores the audio as it streams in. At the end of the command, voice-match keeps only the first burst of speech (plus a little padding) and sends that upstream, so a TV or conversation carrying on after the command is not transcribed. If no speech is found, the whole recording is sent. Speaker recognition comes next.
+**Milestone 1 – trimming.** [Silero VAD](https://github.com/snakers4/silero-vad) (MIT, run with onnxruntime on the CPU) scores the audio as it streams in. At the end of the command, voice-match keeps only the first burst of speech (plus a little padding) and sends that upstream, so a TV or conversation carrying on after the command is not transcribed. If no speech is found, the whole recording is sent.
+
+**Early end:** in `first` mode, as soon as the first burst of speech is followed by more than `VM_TRIM_GAP_MS` of non-speech, voice-match transcribes and answers straight away. Home Assistant stops recording when the transcript arrives (Home Assistant 2026.11 and later reads the reply while still sending audio), so a TV talking in the background no longer keeps the assistant listening.
+
+Speaker recognition comes next.
 
 Each command logs one line: recording length, how much was sent, what was trimmed, time spent in the VAD and the added latency (`proxy_overhead`).
 
@@ -42,6 +46,7 @@ Then in Home Assistant: **Settings → Devices & services → Add integration �
 | `VM_TRIM` | `first` | `first` = keep only the first burst of speech; `edges` = only cut silence before and after; `off` |
 | `VM_TRIM_GAP_MS` | `800` | In `first` mode, a silence longer than this ends the command |
 | `VM_TRIM_PAD_BEFORE_MS` / `VM_TRIM_PAD_AFTER_MS` | `200` / `300` | Audio kept either side of the speech |
+| `VM_EARLY_END` | `true` | Answer as soon as the command ends instead of waiting for Home Assistant to stop recording |
 | `VM_VAD_THRESHOLD` | `0.5` | Speech probability needed to count as speech |
 | `VM_DEBUG_AUDIO_DIR` | *(unset)* | If set, saves each command's audio before/after trimming (for tuning; stays on your server) |
 | `VM_DEBUG_AUDIO_KEEP` | `20` | How many commands of debug audio to keep |
