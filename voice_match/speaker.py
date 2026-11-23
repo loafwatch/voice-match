@@ -78,65 +78,111 @@ def read_wav(path: Path) -> np.ndarray:
         return np.frombuffer(wav.readframes(wav.getnframes()), "<i2").astype(np.float32) / 32768
 
 
-def write_wav(path: Path, pcm: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(path), "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(SAMPLE_RATE)
-        wav.writeframes(pcm)
-
-
 class Voiceprints:
-    """Enrolled voices: data_dir/enrol/<name>/*.wav -> data_dir/voiceprints/<name>.npy"""
+    """Enrolled voices, stored as numbers only - never as audio.
+
+    data_dir/embeddings/<name>/*.npz   one 256-number embedding per enrolment
+                                       command (plus its length in seconds)
+    data_dir/voiceprints/<name>.npy    the person's voiceprint (average)
+    data_dir/voiceprints/<name>.json   quality stats
+
+    An embedding describes how a voice sounds; it cannot be turned back into
+    speech. Enrolment audio is converted as soon as it is captured and never
+    written to disk. Any legacy enrolment recordings (data_dir/enrol/<name>/
+    *.wav) are converted at start-up and then deleted - only those .wav
+    files, and only after their embedding has been saved and read back.
+    """
 
     def __init__(self, model: SpeakerModel, data_dir: str | Path) -> None:
         self.model = model
-        self.enrol_dir = Path(data_dir) / "enrol"
-        self.print_dir = Path(data_dir) / "voiceprints"
+        self.data_dir = Path(data_dir)
+        self.legacy_dir = self.data_dir / "enrol"
+        self.emb_dir = self.data_dir / "embeddings"
+        self.print_dir = self.data_dir / "voiceprints"
         self.prints: dict[str, np.ndarray] = {}
 
+    # ----- enrolment -----
+
+    def add(self, name: str, audio: np.ndarray, stamp: Optional[str] = None) -> Optional[Path]:
+        """Embed one enrolment command's speech and store only the embedding."""
+        if len(audio) < SAMPLE_RATE // 2:
+            return None
+        stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
+        path = self.emb_dir / name / f"{stamp}.npz"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(path, embedding=self.model.embed(audio), seconds=len(audio) / SAMPLE_RATE)
+        return path
+
+    def convert_legacy_recordings(self) -> int:
+        """Turn legacy enrolment .wav files into embeddings, then delete the .wav files."""
+        if not self.legacy_dir.is_dir():
+            return 0
+        deleted = 0
+        for person in sorted(p for p in self.legacy_dir.iterdir() if p.is_dir()):
+            for wav in sorted(person.glob("*.wav")):
+                if not wav.is_file() or wav.is_symlink():
+                    continue
+                try:
+                    audio = read_wav(wav)
+                except (OSError, ValueError, EOFError, wave.Error) as err:
+                    _LOGGER.warning("Not converting %s (left in place): %s", wav.name, err)
+                    continue
+                saved = self.add(person.name, audio, stamp=wav.stem)
+                if saved is None:
+                    _LOGGER.warning("Not converting %s (too short; left in place)", wav.name)
+                    continue
+                try:
+                    check = np.load(saved)["embedding"]
+                    ok = check.shape == (256,) and np.isfinite(check).all()
+                except (OSError, ValueError, KeyError):
+                    ok = False
+                if not ok:
+                    _LOGGER.warning("Embedding for %s did not verify; recording kept", wav.name)
+                    continue
+                wav.unlink()
+                deleted += 1
+        if deleted:
+            _LOGGER.info("Converted and deleted %d enrolment recording(s); no audio is kept", deleted)
+        return deleted
+
+    # ----- voiceprints -----
+
     def build(self) -> None:
-        """(Re)build voiceprints from enrolment recordings, then load them."""
+        """Convert any legacy recordings, (re)build voiceprints, then load them."""
+        self.convert_legacy_recordings()
         self.print_dir.mkdir(parents=True, exist_ok=True)
-        if self.enrol_dir.is_dir():
-            for person in sorted(p for p in self.enrol_dir.iterdir() if p.is_dir()):
-                wavs = sorted(person.glob("*.wav"))
-                if not wavs:
+        if self.emb_dir.is_dir():
+            for person in sorted(p for p in self.emb_dir.iterdir() if p.is_dir()):
+                files = sorted(person.glob("*.npz"))
+                if not files:
                     continue
                 target = self.print_dir / f"{person.name}.npy"
-                newest = max(w.stat().st_mtime for w in wavs)
+                newest = max(f.stat().st_mtime for f in files)
                 if target.exists() and target.stat().st_mtime >= newest:
                     continue
-                self._enrol(person.name, wavs, target)
+                self._build_one(person.name, files, target)
+        self.prints.clear()
         for npy in sorted(self.print_dir.glob("*.npy")):
             self.prints[npy.stem] = np.load(npy)
         _LOGGER.info("Voiceprints loaded: %d", len(self.prints))
 
-    def _enrol(self, name: str, wavs: list[Path], target: Path) -> None:
+    def _build_one(self, name: str, files: list[Path], target: Path) -> None:
         embs, seconds = [], 0.0
-        per_file: list[np.ndarray] = []
-        for wav in wavs:
+        for f in files:
             try:
-                audio = read_wav(wav)
-            except (OSError, ValueError, EOFError) as err:
-                _LOGGER.warning("Skipping %s: %s", wav.name, err)
-                continue
-            if len(audio) < SAMPLE_RATE // 2:
-                continue
-            seconds += len(audio) / SAMPLE_RATE
-            e = self.model.embed(audio)
-            per_file.append(e)
-            embs.append(e)
+                with np.load(f) as data:
+                    embs.append(data["embedding"])
+                    seconds += float(data["seconds"])
+            except (OSError, ValueError, KeyError) as err:
+                _LOGGER.warning("Skipping embedding %s: %s", f.name, err)
         if not embs:
-            _LOGGER.warning("No usable enrolment audio for one voice")
             return
         vp = np.mean(embs, axis=0)
         vp /= np.linalg.norm(vp)
         np.save(target, vp)
-        sims = [float(e @ vp) for e in per_file]
+        sims = [float(e @ vp) for e in embs]
         stats = {
-            "recordings": len(per_file),
+            "recordings": len(embs),
             "seconds": round(seconds, 1),
             "self_similarity_min": round(min(sims), 3),
             "self_similarity_mean": round(float(np.mean(sims)), 3),

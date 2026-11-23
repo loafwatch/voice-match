@@ -44,10 +44,10 @@ async def main() -> None:
             model = SpeakerModel()
             voiceprints = Voiceprints(model, settings.data_dir)
             voiceprints.build()
-            speaker = SpeakerContext(model, voiceprints.prints)
+            speaker = SpeakerContext(model, voiceprints.prints, voiceprints)
             _LOGGER.info("Speaker recognition: on (threshold %.2f)", settings.speaker.threshold)
     if settings.enroll_name:
-        _LOGGER.warning("Enrolment mode: every command is saved as an enrolment recording")
+        _LOGGER.warning("Enrolment mode: every command's voiceprint is saved (no audio is kept)")
 
     info_cache: dict = {}
     try:

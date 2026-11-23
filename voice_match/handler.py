@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from pathlib import Path
 from dataclasses import replace
 from typing import List, Optional
 
@@ -28,16 +27,19 @@ from wyoming.server import AsyncEventHandler
 from . import debug_audio, ha_notify
 from .config import Settings
 from .trim import command_ended, decide
-from .speaker import SpeakerModel, SpeakerTracker, write_wav
+from .speaker import SpeakerModel, SpeakerTracker, Voiceprints
 from .vad import SAMPLE_RATE, SileroVad, VadStream
 
 
 class SpeakerContext:
     """Shared, loaded once: the speaker model and the enrolled voiceprints."""
 
-    def __init__(self, model: SpeakerModel, prints: dict) -> None:
+    def __init__(
+        self, model: SpeakerModel, prints: dict, voiceprints: Optional["Voiceprints"] = None
+    ) -> None:
         self.model = model
         self.prints = prints
+        self.voiceprints = voiceprints  # needed for enrolment
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -249,14 +251,19 @@ class ProxyEventHandler(AsyncEventHandler):
         self.vad_stream = None
         self.tracker = None
 
-        if self.settings.enroll_name and self.settings.data_dir and vad_kept:
-            stamp = time.strftime("%Y%m%d-%H%M%S")
-            path = Path(self.settings.data_dir) / "enrol" / self.settings.enroll_name / f"{stamp}.wav"
+        if (
+            self.settings.enroll_name
+            and vad_kept
+            and self.speaker is not None
+            and self.speaker.voiceprints is not None
+        ):
+            # Only the embedding (numbers) is stored, never the audio.
             try:
-                write_wav(path, vad_kept)
-                speaker_note += " enrolment_saved=yes"
-            except OSError as err:
-                _LOGGER.warning("Could not save enrolment recording: %s", err)
+                pcm = np.frombuffer(vad_kept, dtype="<i2").astype(np.float32) / 32768.0
+                if self.speaker.voiceprints.add(self.settings.enroll_name, pcm):
+                    speaker_note += " enrolment_saved=yes"
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Could not save enrolment embedding")
 
         if self.settings.debug_audio_dir:
             debug_audio.save(

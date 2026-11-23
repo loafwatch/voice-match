@@ -42,10 +42,10 @@ Then set `VM_HA_WEBHOOK_URL` to `http://<home-assistant>:8123/api/webhook/<long 
 ### Enrolling voices
 
 1. Set `VM_DATA_DIR` (and mount a folder there) and `VM_ENROLL=<name>` (letters, digits, `_` or `-`), then restart.
-2. That person gives 10–15 ordinary commands at the satellite, at normal distance, with the room quiet. Each command's speech is saved to `VM_DATA_DIR/enrol/<name>/`.
-3. Remove `VM_ENROLL` and restart. Voiceprints are built at start-up into `VM_DATA_DIR/voiceprints/` (with a `.json` of quality stats). Repeat for each person.
+2. That person gives 10–15 ordinary commands at the satellite, at normal distance, with the room quiet. For each command, a speaker embedding (256 numbers describing the voice) is saved to `VM_DATA_DIR/embeddings/<name>/`. **No audio is ever written to disk**, and an embedding cannot be turned back into speech.
+3. Remove `VM_ENROLL` and restart. Voiceprints are built at start-up into `VM_DATA_DIR/voiceprints/` (with a `.json` of quality stats). Repeat for each person. To top up later, enrol again: new embeddings are averaged in with the old ones.
 
-Delete a person's `enrol/<name>` folder and `voiceprints/<name>.*` files to remove them.
+Delete a person's `embeddings/<name>/` folder and `voiceprints/<name>.*` files to remove them. Enrolment recordings from older versions (`enrol/<name>/*.wav`) are converted to embeddings at start-up and the `.wav` files deleted; nothing else in the folder is touched.
 
 Each command logs one line: recording length, how much was sent, what was trimmed, time spent in the VAD and the added latency (`proxy_overhead`).
 
