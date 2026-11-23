@@ -16,3 +16,5 @@ enrolment/
 # Local list of private words the privacy scan blocks. NEVER commit.
 .private-terms
 .private-terms-required
+# Downloaded at build time by scripts/fetch_models.py
+voice_match/models/

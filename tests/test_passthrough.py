@@ -82,7 +82,7 @@ async def servers(unused_tcp_port_factory):
         debug=True,
     )
     proxy = await _start(
-        AsyncTcpServer("127.0.0.1", proxy_port), partial(ProxyEventHandler, settings, {})
+        AsyncTcpServer("127.0.0.1", proxy_port), partial(ProxyEventHandler, settings, {}, None)
     )
     yield proxy_port
     await proxy.stop()
@@ -131,7 +131,7 @@ async def test_upstream_down_returns_error(unused_tcp_port_factory):
         describe_timeout=1, log_transcripts=False, debug=False,
     )
     proxy = await _start(
-        AsyncTcpServer("127.0.0.1", proxy_port), partial(ProxyEventHandler, settings, {})
+        AsyncTcpServer("127.0.0.1", proxy_port), partial(ProxyEventHandler, settings, {}, None)
     )
     try:
         async with AsyncTcpClient("127.0.0.1", proxy_port) as client:

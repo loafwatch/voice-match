@@ -21,6 +21,18 @@ async def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    vad = None
+    if settings.trim.mode != "off":
+        from .vad import SileroVad
+
+        vad = SileroVad()
+        _LOGGER.info("Trimming: %s (gap %.0f ms)", settings.trim.mode, settings.trim.gap_ms)
+    else:
+        _LOGGER.info("Trimming: off")
+    if settings.debug_audio_dir:
+        _LOGGER.warning("Saving debug audio to %s (last %d commands)",
+                        settings.debug_audio_dir, settings.debug_audio_keep)
+
     info_cache: dict = {}
     try:
         info_cache["info"] = await fetch_upstream_info(settings)
@@ -30,7 +42,7 @@ async def main() -> None:
 
     server = AsyncServer.from_uri(settings.uri)
     _LOGGER.info("Listening on %s", settings.uri)
-    await server.run(partial(ProxyEventHandler, settings, info_cache))
+    await server.run(partial(ProxyEventHandler, settings, info_cache, vad))
 
 
 def run() -> None:
